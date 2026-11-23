@@ -52,6 +52,7 @@ export default async function handler(req, res) {
         model,
         store: false,
         input: `${SYSTEM_PROMPT}\n\nINTAKE DATA START\n${intake}\nINTAKE DATA END\n\nATTORNEY NOTES DATA START\n${attorneyNotes || '[MISSING: attorney notes or answers]'}\nATTORNEY NOTES DATA END`,
+        generation_config: { thinking_level: 'low' },
         response_format: { type: 'text', mime_type: 'application/json', schema: RESPONSE_SCHEMA }
       })
     });
