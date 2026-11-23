@@ -26,7 +26,12 @@ const RESPONSE_SCHEMA = {
 };
 
 function outputText(response) {
-  return (response.candidates?.[0]?.content?.parts || []).map((part) => part.text || '').join('');
+  return (response.steps || [])
+    .filter((step) => step.type === 'model_output')
+    .flatMap((step) => step.content || [])
+    .filter((content) => content.type === 'text')
+    .map((content) => content.text || '')
+    .join('');
 }
 
 export default async function handler(req, res) {
@@ -39,14 +44,15 @@ export default async function handler(req, res) {
   if (intake.length + attorneyNotes.length > 50000) return res.status(400).json({ error: 'Intake text and notes are too long.' });
 
   try {
-    const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-    const geminiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+    const geminiResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: [{ role: 'user', parts: [{ text: `INTAKE DATA START\n${intake}\nINTAKE DATA END\n\nATTORNEY NOTES DATA START\n${attorneyNotes || '[MISSING: attorney notes or answers]'}\nATTORNEY NOTES DATA END` }] }],
-        generationConfig: { responseMimeType: 'application/json', responseJsonSchema: RESPONSE_SCHEMA }
+        model,
+        store: false,
+        input: `${SYSTEM_PROMPT}\n\nINTAKE DATA START\n${intake}\nINTAKE DATA END\n\nATTORNEY NOTES DATA START\n${attorneyNotes || '[MISSING: attorney notes or answers]'}\nATTORNEY NOTES DATA END`,
+        response_format: { type: 'text', mime_type: 'application/json', schema: RESPONSE_SCHEMA }
       })
     });
     if (!geminiResponse.ok) {
