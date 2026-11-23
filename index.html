@@ -6,19 +6,19 @@
   <title>Wasatch Employment Law | Intake Drafting</title>
   <style>
     :root { color-scheme: light; font-family: system-ui, sans-serif; color: #172033; background: #f5f7fa; }
-    body { margin: 0; }
-    main { max-width: 850px; margin: 3rem auto; padding: 0 1rem 3rem; }
+    body { margin: 0; } main { max-width: 850px; margin: 3rem auto; padding: 0 1rem 3rem; }
     h1 { margin-bottom: .25rem; } .lede { color: #586174; margin-top: 0; }
     .card { background: #fff; border: 1px solid #dbe1ea; border-radius: 10px; padding: 1.25rem; margin-top: 1rem; }
     label { display: block; font-weight: 650; margin: 1rem 0 .4rem; }
     textarea, input { box-sizing: border-box; width: 100%; font: inherit; padding: .7rem; border: 1px solid #aeb8c6; border-radius: 6px; }
-    textarea { min-height: 220px; resize: vertical; }
+    textarea { min-height: 190px; resize: vertical; } #attorney-notes { min-height: 130px; }
     button { cursor: pointer; margin-top: 1rem; padding: .7rem 1rem; font: inherit; font-weight: 650; color: white; background: #1b4d76; border: 0; border-radius: 6px; }
     button:hover { background: #113a5c; } button:disabled { opacity: .6; cursor: wait; }
     .secondary { background: #53657b; } .secondary:hover { background: #394b60; }
     #status { min-height: 1.4rem; margin: 1rem 0 0; } .error { color: #a61b1b; font-weight: 650; }
     .deadline { padding: .75rem; background: #f1f5f9; border-radius: 6px; margin-top: .6rem; } .passed { color: #a61b1b; font-weight: 700; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; background: #f7f9fb; border-left: 4px solid #1b4d76; padding: 1rem; }
+    .notice { margin: 1rem 0 0; padding: .75rem; border-left: 4px solid #b66a00; background: #fff5df; font-weight: 700; }
     .hidden { display: none; }
   </style>
 </head>
@@ -26,98 +26,144 @@
   <main>
     <h1>Wasatch Employment Law</h1>
     <p class="lede">Internal intake drafting tool — drafts require attorney review.</p>
+
     <section class="card">
       <label for="adverse-date">Date of adverse action <span aria-hidden="true">*</span></label>
       <input id="adverse-date" type="date" required>
       <label for="intake">Client intake text</label>
       <textarea id="intake" placeholder="Paste the client intake here..."></textarea>
+      <label for="attorney-notes">Attorney notes or answers</label>
+      <textarea id="attorney-notes" placeholder="Add attorney notes or answers here..."></textarea>
       <button id="generate" type="button">Generate</button>
       <p id="status" role="alert" aria-live="polite"></p>
     </section>
 
     <section id="deadlines" class="card hidden">
-      <h2>Filing deadlines</h2>
+      <h2>UALD filing deadline</h2>
       <div id="uald-deadline" class="deadline"></div>
-      <div id="eeoc-deadline" class="deadline"></div>
       <button id="calendar" class="secondary" type="button">Download calendar file</button>
     </section>
 
-    <section id="drafts" class="hidden">
-      <section class="card"><h2>UALD intake summary</h2><pre id="summary"></pre></section>
-      <section class="card"><h2>Client next-steps letter</h2><pre id="letter"></pre></section>
+    <section id="charge-result" class="card hidden">
+      <h2>UALD Charge draft</h2>
+      <p class="notice">Attorney review is required.</p>
+      <button id="download-charge" type="button">Download UALD Charge PDF</button>
+    </section>
+
+    <section id="letter-result" class="card hidden">
+      <h2>Client next-steps letter</h2><pre id="letter"></pre>
     </section>
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
-    let calendarDeadlines = null;
+    const FORM_URL = './Blank_UALD%20Charge.pdf';
+    const CAUSE_CENTERS = {
+      'Race': [30, 569.25], 'Color': [81, 569.25], 'Sex': [138.75, 569.25], 'Religion': [180.75, 569.25], 'National Origin': [240, 569.25],
+      'Retaliation': [30, 557.25], 'Age': [121.5, 556.25], 'Disability': [180.75, 556.25], 'Gender Identity': [30, 541.75],
+      'Sexual Orientation': [128, 541.75], 'Religious Liberty Protection': [238.75, 542.25]
+    };
+    const TEXT_FIELDS = {
+      ualdNumber: [489, 742.6, 489, 556.5, 8], eeocNumber: [489, 730.8, 489, 556.5, 8],
+      chargingPartyNameAndHonorific: [21.6, 704, 21.6, 398, 10], homeTelephone: [422, 704, 422, 556.5, 10],
+      chargingPartyAddress: [21, 673.5, 21, 470, 10], dateOfBirth: [479, 673.5, 479, 556.5, 10],
+      respondentName: [21.6, 621.5, 21.6, 420, 10], respondentTelephone: [422, 621.5, 422, 556.5, 10],
+      respondentAddress: [21, 594.5, 21, 458, 10], county: [467, 594.5, 467, 556.5, 10],
+      earliestDate: [389, 554.5, 389, 470, 8], latestDate: [483, 554.5, 483, 556.5, 8],
+      printedName: [274, 278, 245.5, 393, 10]
+    };
+    let calendarDeadline = null;
+    let chargeData = null;
 
-    function localDate(value) {
-      const [year, month, day] = value.split('-').map(Number);
-      return new Date(year, month - 1, day);
+    function localDate(value) { const [year, month, day] = value.split('-').map(Number); return new Date(year, month - 1, day); }
+    function addDays(date, days) { const result = new Date(date); result.setDate(result.getDate() + days); return result; }
+    function displayDate(date) { return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'long', day: 'numeric' }).format(date); }
+    function icsDate(date) { return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`; }
+    function escapeIcs(text) { return text.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n'); }
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob); const link = document.createElement('a');
+      link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
     }
-    function addDays(date, days) {
-      const result = new Date(date);
-      result.setDate(result.getDate() + days);
-      return result;
-    }
-    function displayDate(date) {
-      return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'long', day: 'numeric' }).format(date);
-    }
-    function icsDate(date) {
-      const yyyy = date.getFullYear();
-      const mm = String(date.getMonth() + 1).padStart(2, '0');
-      const dd = String(date.getDate()).padStart(2, '0');
-      return `${yyyy}${mm}${dd}`;
-    }
-    function escapeIcs(text) {
-      return text.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
-    }
-    function showDeadlines(dateValue) {
-      const start = localDate(dateValue);
-      const uald = addDays(start, 180);
-      const eeoc = addDays(start, 300);
-      const today = new Date(); today.setHours(0, 0, 0, 0);
-      const render = (name, deadline) => `${name}: <strong>${displayDate(deadline)}</strong>${deadline < today ? ' <span class="passed">(deadline has passed)</span>' : ''}`;
-      $('uald-deadline').innerHTML = render('Utah UALD (180 days)', uald);
-      $('eeoc-deadline').innerHTML = render('EEOC (300 days)', eeoc);
-      $('deadlines').classList.remove('hidden');
-      calendarDeadlines = { uald, eeoc };
+    function showDeadline(dateValue) {
+      const deadline = addDays(localDate(dateValue), 180); const today = new Date(); today.setHours(0, 0, 0, 0);
+      $('uald-deadline').innerHTML = `Utah UALD (180 days): <strong>${displayDate(deadline)}</strong>${deadline < today ? ' <span class="passed">(deadline has passed)</span>' : ''}`;
+      $('deadlines').classList.remove('hidden'); calendarDeadline = deadline;
     }
     function makeCalendar() {
-      if (!calendarDeadlines) return;
+      if (!calendarDeadline) return;
       const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-      const event = (title, date, id) => [
-        'BEGIN:VEVENT', `UID:${id}-${Date.now()}@wasatchemploymentlaw.example`, `DTSTAMP:${stamp}`,
-        `DTSTART;VALUE=DATE:${icsDate(date)}`, `DTEND;VALUE=DATE:${icsDate(addDays(date, 1))}`,
-        `SUMMARY:${escapeIcs(title)}`, 'END:VEVENT'
-      ].join('\r\n');
-      const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wasatch Employment Law//Intake Deadlines//EN',
-        event('Utah UALD filing deadline', calendarDeadlines.uald, 'uald'),
-        event('EEOC filing deadline', calendarDeadlines.eeoc, 'eeoc'), 'END:VCALENDAR', ''
-      ].join('\r\n');
-      const url = URL.createObjectURL(new Blob([ics], { type: 'text/calendar;charset=utf-8' }));
-      const link = document.createElement('a'); link.href = url; link.download = 'employment-filing-deadlines.ics'; link.click();
-      URL.revokeObjectURL(url);
+      const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wasatch Employment Law//UALD Deadline//EN', 'BEGIN:VEVENT',
+        `UID:uald-${Date.now()}@wasatchemploymentlaw.example`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${icsDate(calendarDeadline)}`,
+        `DTEND;VALUE=DATE:${icsDate(addDays(calendarDeadline, 1))}`, `SUMMARY:${escapeIcs('Utah UALD filing deadline')}`, 'END:VEVENT', 'END:VCALENDAR', ''].join('\r\n');
+      downloadBlob(new Blob([ics], { type: 'text/calendar;charset=utf-8' }), 'utah-uald-filing-deadline.ics');
     }
-    $('calendar').addEventListener('click', makeCalendar);
-    $('generate').addEventListener('click', async () => {
-      const dateValue = $('adverse-date').value;
-      const intake = $('intake').value.trim();
-      const status = $('status');
-      status.className = '';
-      if (!dateValue) { status.textContent = 'A date of adverse action is required before generating.'; status.className = 'error'; return; }
-      showDeadlines(dateValue);
-      if (!intake) { status.textContent = 'Paste an intake before generating drafts.'; status.className = 'error'; return; }
-      $('generate').disabled = true; status.textContent = 'Generating drafts…';
+    function drawX(page, [x, y], color) {
+      page.drawLine({ start: { x: x - 2.5, y: y - 2.5 }, end: { x: x + 2.5, y: y + 2.5 }, thickness: 1, color });
+      page.drawLine({ start: { x: x - 2.5, y: y + 2.5 }, end: { x: x + 2.5, y: y - 2.5 }, thickness: 1, color });
+    }
+    function drawField(page, font, value, [x, y, left, right, originalSize], color) {
+      const text = String(value || '[MISSING: field]'); let size = originalSize;
+      while (size > 4 && font.widthOfTextAtSize(text, size) > right - left) size -= 0.25;
+      page.drawText(text, { x, y, size, font, color });
+    }
+    function wrapLine(font, text, size, maxWidth) {
+      const words = text.trim().split(/\s+/).filter(Boolean); if (!words.length) return [''];
+      const lines = []; let line = '';
+      for (const word of words) {
+        const candidate = line ? `${line} ${word}` : word;
+        if (line && font.widthOfTextAtSize(candidate, size) > maxWidth) { lines.push(line); line = word; } else line = candidate;
+      }
+      lines.push(line); return lines;
+    }
+    function wrappedParticulars(font, particulars, size) {
+      const lines = [];
+      for (const paragraph of String(particulars || '[MISSING: particulars]').split(/\n\s*\n/)) { lines.push(...wrapLine(font, paragraph, size, 556.4), ''); }
+      if (lines[lines.length - 1] === '') lines.pop(); return lines;
+    }
+    function drawLines(page, font, lines, x, y, size, lineHeight, color) {
+      lines.forEach((line, index) => page.drawText(line, { x, y: y - index * lineHeight, size, font, color }));
+    }
+    function drawParticulars(pdfDoc, page, font, particulars, color) {
+      let size = 6.4, lineHeight = size * 1.22, lines = wrappedParticulars(font, particulars, size);
+      let maxLines = Math.floor((506.6 - 341.2) / lineHeight) + 1;
+      while (lines.length > maxLines && size > 6) { size = Math.max(6, size - 0.1); lineHeight = size * 1.22; lines = wrappedParticulars(font, particulars, size); maxLines = Math.floor((506.6 - 341.2) / lineHeight) + 1; }
+      if (lines.length <= maxLines) return drawLines(page, font, lines, 19.6, 506.6, size, lineHeight, color);
+      drawLines(page, font, [...lines.slice(0, maxLines - 1), 'See Exhibit A.'], 19.6, 506.6, size, lineHeight, color);
+      let remaining = lines.slice(maxLines - 1);
+      while (remaining.length) {
+        const exhibit = pdfDoc.addPage([612, 792]); exhibit.drawText('Exhibit A.', { x: 40, y: 750, size: 12, font, color });
+        const count = 62; drawLines(exhibit, font, remaining.slice(0, count), 40, 720, 9, 11, color); remaining = remaining.slice(count);
+      }
+    }
+    async function downloadCharge() {
+      if (!chargeData || !window.PDFLib) return;
+      const status = $('status'); $('download-charge').disabled = true; status.className = ''; status.textContent = 'Preparing UALD Charge PDF…';
       try {
-        const response = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ intake }) });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Unable to generate drafts.');
-        $('summary').textContent = data.summary;
-        $('letter').textContent = data.letter;
-        $('drafts').classList.remove('hidden');
-        status.textContent = 'Drafts generated.';
+        const response = await fetch(FORM_URL); if (!response.ok) throw new Error('Unable to load the blank UALD Charge form.');
+        const { PDFDocument, StandardFonts, rgb } = window.PDFLib; const pdfDoc = await PDFDocument.load(await response.arrayBuffer());
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica); const page = pdfDoc.getPages()[0]; const black = rgb(0, 0, 0);
+        for (const [key, field] of Object.entries(TEXT_FIELDS)) drawField(page, font, chargeData[key], field, black);
+        for (const cause of chargeData.selectedCauses || []) if (CAUSE_CENTERS[cause]) drawX(page, CAUSE_CENTERS[cause], black);
+        if (chargeData.continuingAction) drawX(page, [398, 544.75], black);
+        drawParticulars(pdfDoc, page, font, chargeData.particulars, black);
+        const lastName = String(chargeData.lastName || 'MISSING').replace(/[\\/:*?"<>|]/g, '').trim() || 'MISSING';
+        downloadBlob(new Blob([await pdfDoc.save()], { type: 'application/pdf' }), `${lastName}_UALD Charge_[Draft].pdf`);
+        status.textContent = 'UALD Charge PDF downloaded.';
+      } catch (error) { status.textContent = error.message || 'Unable to create the UALD Charge PDF.'; status.className = 'error'; }
+      finally { $('download-charge').disabled = false; }
+    }
+    $('calendar').addEventListener('click', makeCalendar); $('download-charge').addEventListener('click', downloadCharge);
+    $('generate').addEventListener('click', async () => {
+      const dateValue = $('adverse-date').value, intake = $('intake').value.trim(), attorneyNotes = $('attorney-notes').value.trim(), status = $('status'); status.className = '';
+      if (!dateValue) { status.textContent = 'A date of adverse action is required before generating.'; status.className = 'error'; return; }
+      showDeadline(dateValue);
+      if (!intake) { status.textContent = 'Paste an intake before generating drafts.'; status.className = 'error'; return; }
+      $('generate').disabled = true; status.textContent = 'Generating draft materials…';
+      try {
+        const response = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ intake, attorneyNotes }) });
+        const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Unable to generate draft materials.');
+        chargeData = data.charge; $('letter').textContent = data.letter; $('charge-result').classList.remove('hidden'); $('letter-result').classList.remove('hidden'); status.textContent = 'Draft materials generated.';
       } catch (error) { status.textContent = error.message; status.className = 'error'; }
       finally { $('generate').disabled = false; }
     });
