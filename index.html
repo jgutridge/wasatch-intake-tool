@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wasatch Employment Law | Intake Drafting</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #172033; background: #f5f7fa; }
+    body { margin: 0; }
+    main { max-width: 850px; margin: 3rem auto; padding: 0 1rem 3rem; }
+    h1 { margin-bottom: .25rem; } .lede { color: #586174; margin-top: 0; }
+    .card { background: #fff; border: 1px solid #dbe1ea; border-radius: 10px; padding: 1.25rem; margin-top: 1rem; }
+    label { display: block; font-weight: 650; margin: 1rem 0 .4rem; }
+    textarea, input { box-sizing: border-box; width: 100%; font: inherit; padding: .7rem; border: 1px solid #aeb8c6; border-radius: 6px; }
+    textarea { min-height: 220px; resize: vertical; }
+    button { cursor: pointer; margin-top: 1rem; padding: .7rem 1rem; font: inherit; font-weight: 650; color: white; background: #1b4d76; border: 0; border-radius: 6px; }
+    button:hover { background: #113a5c; } button:disabled { opacity: .6; cursor: wait; }
+    .secondary { background: #53657b; } .secondary:hover { background: #394b60; }
+    #status { min-height: 1.4rem; margin: 1rem 0 0; } .error { color: #a61b1b; font-weight: 650; }
+    .deadline { padding: .75rem; background: #f1f5f9; border-radius: 6px; margin-top: .6rem; } .passed { color: #a61b1b; font-weight: 700; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; background: #f7f9fb; border-left: 4px solid #1b4d76; padding: 1rem; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Wasatch Employment Law</h1>
+    <p class="lede">Internal intake drafting tool — drafts require attorney review.</p>
+    <section class="card">
+      <label for="adverse-date">Date of adverse action <span aria-hidden="true">*</span></label>
+      <input id="adverse-date" type="date" required>
+      <label for="intake">Client intake text</label>
+      <textarea id="intake" placeholder="Paste the client intake here..."></textarea>
+      <button id="generate" type="button">Generate</button>
+      <p id="status" role="alert" aria-live="polite"></p>
+    </section>
+
+    <section id="deadlines" class="card hidden">
+      <h2>Filing deadlines</h2>
+      <div id="uald-deadline" class="deadline"></div>
+      <div id="eeoc-deadline" class="deadline"></div>
+      <button id="calendar" class="secondary" type="button">Download calendar file</button>
+    </section>
+
+    <section id="drafts" class="hidden">
+      <section class="card"><h2>UALD intake summary</h2><pre id="summary"></pre></section>
+      <section class="card"><h2>Client next-steps letter</h2><pre id="letter"></pre></section>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let calendarDeadlines = null;
+
+    function localDate(value) {
+      const [year, month, day] = value.split('-').map(Number);
+      return new Date(year, month - 1, day);
+    }
+    function addDays(date, days) {
+      const result = new Date(date);
+      result.setDate(result.getDate() + days);
+      return result;
+    }
+    function displayDate(date) {
+      return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'long', day: 'numeric' }).format(date);
+    }
+    function icsDate(date) {
+      const yyyy = date.getFullYear();
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const dd = String(date.getDate()).padStart(2, '0');
+      return `${yyyy}${mm}${dd}`;
+    }
+    function escapeIcs(text) {
+      return text.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+    }
+    function showDeadlines(dateValue) {
+      const start = localDate(dateValue);
+      const uald = addDays(start, 180);
+      const eeoc = addDays(start, 300);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const render = (name, deadline) => `${name}: <strong>${displayDate(deadline)}</strong>${deadline < today ? ' <span class="passed">(deadline has passed)</span>' : ''}`;
+      $('uald-deadline').innerHTML = render('Utah UALD (180 days)', uald);
+      $('eeoc-deadline').innerHTML = render('EEOC (300 days)', eeoc);
+      $('deadlines').classList.remove('hidden');
+      calendarDeadlines = { uald, eeoc };
+    }
+    function makeCalendar() {
+      if (!calendarDeadlines) return;
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+      const event = (title, date, id) => [
+        'BEGIN:VEVENT', `UID:${id}-${Date.now()}@wasatchemploymentlaw.example`, `DTSTAMP:${stamp}`,
+        `DTSTART;VALUE=DATE:${icsDate(date)}`, `DTEND;VALUE=DATE:${icsDate(addDays(date, 1))}`,
+        `SUMMARY:${escapeIcs(title)}`, 'END:VEVENT'
+      ].join('\r\n');
+      const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wasatch Employment Law//Intake Deadlines//EN',
+        event('Utah UALD filing deadline', calendarDeadlines.uald, 'uald'),
+        event('EEOC filing deadline', calendarDeadlines.eeoc, 'eeoc'), 'END:VCALENDAR', ''
+      ].join('\r\n');
+      const url = URL.createObjectURL(new Blob([ics], { type: 'text/calendar;charset=utf-8' }));
+      const link = document.createElement('a'); link.href = url; link.download = 'employment-filing-deadlines.ics'; link.click();
+      URL.revokeObjectURL(url);
+    }
+    $('calendar').addEventListener('click', makeCalendar);
+    $('generate').addEventListener('click', async () => {
+      const dateValue = $('adverse-date').value;
+      const intake = $('intake').value.trim();
+      const status = $('status');
+      status.className = '';
+      if (!dateValue) { status.textContent = 'A date of adverse action is required before generating.'; status.className = 'error'; return; }
+      showDeadlines(dateValue);
+      if (!intake) { status.textContent = 'Paste an intake before generating drafts.'; status.className = 'error'; return; }
+      $('generate').disabled = true; status.textContent = 'Generating drafts…';
+      try {
+        const response = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ intake }) });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Unable to generate drafts.');
+        $('summary').textContent = data.summary;
+        $('letter').textContent = data.letter;
+        $('drafts').classList.remove('hidden');
+        status.textContent = 'Drafts generated.';
+      } catch (error) { status.textContent = error.message; status.className = 'error'; }
+      finally { $('generate').disabled = false; }
+    });
+  </script>
+</body>
+</html>
