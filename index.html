@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Wasatch Employment Law | Intake Drafting</title>
+  <title>Wasatch Vale LLP | Intake Drafting</title>
   <style>
     :root { color-scheme: light; font-family: system-ui, sans-serif; color: #172033; background: #f5f7fa; }
     body { margin: 0; } main { max-width: 850px; margin: 3rem auto; padding: 0 1rem 3rem; }
@@ -15,6 +15,9 @@
     button { cursor: pointer; margin-top: 1rem; padding: .7rem 1rem; font: inherit; font-weight: 650; color: white; background: #1b4d76; border: 0; border-radius: 6px; }
     button:hover { background: #113a5c; } button:disabled { opacity: .6; cursor: wait; }
     .secondary { background: #53657b; } .secondary:hover { background: #394b60; }
+    .field-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-top: 1rem; }
+    .field-heading label { margin: 0 0 .4rem; } .field-heading button { margin: 0 0 .4rem; padding: .45rem .7rem; font-size: .9rem; }
+    .helper { color: #586174; font-size: .9rem; margin: .4rem 0 0; }
     #status { min-height: 1.4rem; margin: 1rem 0 0; } .error { color: #a61b1b; font-weight: 650; }
     .deadline { padding: .75rem; background: #f1f5f9; border-radius: 6px; margin-top: .6rem; } .passed { color: #a61b1b; font-weight: 700; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.5; background: #f7f9fb; border-left: 4px solid #1b4d76; padding: 1rem; }
@@ -24,14 +27,19 @@
 </head>
 <body>
   <main>
-    <h1>Wasatch Employment Law</h1>
+    <h1>Wasatch Vale LLP</h1>
     <p class="lede">Internal intake drafting tool — drafts require attorney review.</p>
 
     <section class="card">
       <label for="adverse-date">Date of adverse action <span aria-hidden="true">*</span></label>
       <input id="adverse-date" type="date" required>
-      <label for="intake">Client intake text</label>
+      <div class="field-heading">
+        <label for="intake">Client intake text</label>
+        <button id="upload-intake" class="secondary" type="button">Upload intake file</button>
+      </div>
+      <input id="intake-file" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pdf,application/pdf" hidden>
       <textarea id="intake" placeholder="Paste the client intake here..."></textarea>
+      <p id="file-status" class="helper" aria-live="polite">Paste text or upload a DOCX or text-based PDF. You can review and edit extracted text before generating.</p>
       <label for="attorney-notes">Attorney notes or answers</label>
       <textarea id="attorney-notes" placeholder="Add attorney notes or answers here..."></textarea>
       <button id="generate" type="button">Generate</button>
@@ -56,6 +64,8 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     const FORM_URL = './Blank_UALD%20Charge.pdf';
@@ -75,6 +85,10 @@
     };
     let calendarDeadline = null;
     let chargeData = null;
+    let intakeExtractionError = false;
+    let intakeExtracting = false;
+
+    if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
 
     function localDate(value) { const [year, month, day] = value.split('-').map(Number); return new Date(year, month - 1, day); }
     function addDays(date, days) { const result = new Date(date); result.setDate(result.getDate() + days); return result; }
@@ -85,6 +99,60 @@
       const url = URL.createObjectURL(blob); const link = document.createElement('a');
       link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
     }
+    function setFileStatus(message, isError = false) {
+      $('file-status').textContent = message;
+      $('file-status').className = isError ? 'helper error' : 'helper';
+    }
+    function supportedIntakeFile(file) {
+      const name = file.name.toLowerCase();
+      return name.endsWith('.docx') || name.endsWith('.pdf');
+    }
+    async function extractDocxText(file) {
+      if (!window.mammoth) throw new Error('DOCX extraction is unavailable. Paste the intake text instead.');
+      const result = await window.mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+      return result.value;
+    }
+    async function extractPdfText(file) {
+      if (!window.pdfjsLib) throw new Error('PDF extraction is unavailable. Paste the intake text instead.');
+      const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+      const pages = [];
+      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+        const content = await (await pdf.getPage(pageNumber)).getTextContent();
+        pages.push(content.items.map((item) => item.str).join(' '));
+      }
+      return pages.join('\n\n');
+    }
+    async function uploadIntakeFile() {
+      const file = $('intake-file').files[0];
+      if (!file) return;
+      if (!supportedIntakeFile(file)) {
+        intakeExtractionError = true;
+        setFileStatus('Choose a DOCX or PDF intake file, or paste the intake text instead.', true);
+        return;
+      }
+      if (file.size > 20 * 1024 * 1024) {
+        intakeExtractionError = true;
+        setFileStatus('The intake file is too large to extract in the browser. Paste the intake text instead.', true);
+        return;
+      }
+      intakeExtracting = true;
+      $('upload-intake').disabled = true;
+      setFileStatus(`Extracting text from ${file.name}…`);
+      try {
+        const text = file.name.toLowerCase().endsWith('.docx') ? await extractDocxText(file) : await extractPdfText(file);
+        if (!text || !text.trim()) throw new Error('No readable text was found. The PDF may be scanned or protected. Paste the intake text instead.');
+        $('intake').value = text.trim();
+        intakeExtractionError = false;
+        setFileStatus(`Text extracted from ${file.name}. Review or edit it before generating.`);
+      } catch (error) {
+        intakeExtractionError = true;
+        setFileStatus(error.message || 'Could not extract readable text from this file. Paste the intake text instead.', true);
+      } finally {
+        intakeExtracting = false;
+        $('upload-intake').disabled = false;
+        $('intake-file').value = '';
+      }
+    }
     function showDeadline(dateValue) {
       const deadline = addDays(localDate(dateValue), 180); const today = new Date(); today.setHours(0, 0, 0, 0);
       $('uald-deadline').innerHTML = `Utah UALD (180 days): <strong>${displayDate(deadline)}</strong>${deadline < today ? ' <span class="passed">(deadline has passed)</span>' : ''}`;
@@ -93,8 +161,8 @@
     function makeCalendar() {
       if (!calendarDeadline) return;
       const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-      const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wasatch Employment Law//UALD Deadline//EN', 'BEGIN:VEVENT',
-        `UID:uald-${Date.now()}@wasatchemploymentlaw.example`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${icsDate(calendarDeadline)}`,
+      const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wasatch Vale LLP//UALD Deadline//EN', 'BEGIN:VEVENT',
+        `UID:uald-${Date.now()}@wasatchvalellp.example`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${icsDate(calendarDeadline)}`,
         `DTEND;VALUE=DATE:${icsDate(addDays(calendarDeadline, 1))}`, `SUMMARY:${escapeIcs('Utah UALD filing deadline')}`, 'END:VEVENT', 'END:VCALENDAR', ''].join('\r\n');
       downloadBlob(new Blob([ics], { type: 'text/calendar;charset=utf-8' }), 'utah-uald-filing-deadline.ics');
     }
@@ -154,11 +222,18 @@
       finally { $('download-charge').disabled = false; }
     }
     $('calendar').addEventListener('click', makeCalendar); $('download-charge').addEventListener('click', downloadCharge);
+    $('upload-intake').addEventListener('click', () => $('intake-file').click());
+    $('intake-file').addEventListener('change', uploadIntakeFile);
+    $('intake').addEventListener('input', () => {
+      if (intakeExtractionError) { intakeExtractionError = false; setFileStatus('Intake text changed. It will be treated the same as pasted text.'); }
+    });
     $('generate').addEventListener('click', async () => {
       const dateValue = $('adverse-date').value, intake = $('intake').value.trim(), attorneyNotes = $('attorney-notes').value.trim(), status = $('status'); status.className = '';
       if (!dateValue) { status.textContent = 'A date of adverse action is required before generating.'; status.className = 'error'; return; }
       showDeadline(dateValue);
-      if (!intake) { status.textContent = 'Paste an intake before generating drafts.'; status.className = 'error'; return; }
+      if (intakeExtracting) { status.textContent = 'Wait for intake-file text extraction to finish before generating.'; status.className = 'error'; return; }
+      if (intakeExtractionError) { status.textContent = 'No readable text was extracted from the intake file. Paste or edit intake text before generating.'; status.className = 'error'; return; }
+      if (!intake) { status.textContent = 'Paste or upload an intake before generating drafts.'; status.className = 'error'; return; }
       $('generate').disabled = true; status.textContent = 'Generating draft materials…';
       try {
         const response = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ intake, attorneyNotes }) });
