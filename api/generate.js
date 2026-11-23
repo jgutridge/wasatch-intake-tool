@@ -44,7 +44,7 @@ export default async function handler(req, res) {
   if (intake.length + attorneyNotes.length > 50000) return res.status(400).json({ error: 'Intake text and notes are too long.' });
 
   try {
-    const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+    const model = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
     const geminiResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
@@ -52,7 +52,7 @@ export default async function handler(req, res) {
         model,
         store: false,
         input: `${SYSTEM_PROMPT}\n\nINTAKE DATA START\n${intake}\nINTAKE DATA END\n\nATTORNEY NOTES DATA START\n${attorneyNotes || '[MISSING: attorney notes or answers]'}\nATTORNEY NOTES DATA END`,
-        generation_config: { thinking_level: 'low' },
+        generation_config: { thinking_level: 'minimal' },
         response_format: { type: 'text', mime_type: 'application/json', schema: RESPONSE_SCHEMA }
       })
     });
